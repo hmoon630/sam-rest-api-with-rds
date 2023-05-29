@@ -1,0 +1,243 @@
+Transform:
+  - AWS::LanguageExtensions
+  - AWS::Serverless-2016-10-31
+Parameters:
+  SecretName:
+    Type: String
+    Description: Secrets Manager secret ARN or name
+    Default: skills/skills-user
+  # ParametersAndSecretsExtensionLayer:
+  #   Type: String
+  #   Description: Parameters and secrets extension layer ARN. Checkout your region
+  #   Default: arn:aws:lambda:ap-northeast-2:738900069198:layer:AWS-Parameters-and-Secrets-Lambda-Extension:4
+  Subnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets to deploy lambda. It requires NAT for internet access.
+  SecurityGroups:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: Security group for lambda. It requires access to RDS.
+  PreferCanary:
+    Type: String
+    Description: Perform canary deployment for new lambda version.
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  IsCanary: !Equals [!Ref PreferCanary, "true"]
+
+Globals:
+  Function:
+    Runtime: python3.10
+    Architectures:
+      - "x86_64"
+    Handler: lambda_function.lambda_handler
+    Timeout: 10
+    AutoPublishAlias: live
+    DeploymentPreference:
+      Type: !If [IsCanary, "Canary10Percent5Minutes", "AllAtOnce"]
+    Environment:
+      Variables:
+        SECRET_NAME: !Ref SecretName
+        PARAMETERS_SECRETS_EXTENSION_LOG_LEVEL: WARN
+        LAYER: !Ref PackageLayer
+    VpcConfig:
+      SubnetIds: !Ref Subnets
+      SecurityGroupIds: !Ref SecurityGroups
+    Layers:
+      - !Ref PackageLayer
+      # - !Ref ParametersAndSecretsExtensionLayer
+
+Resources:
+  ProductApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: product-api
+      StageName: prod
+      OpenApiVersion: "3.0.1"
+      DefinitionBody:
+        'Fn::Transform':
+          Name: AWS::Include
+          Parameters:
+            Location: openapi.yaml
+
+  PackageLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: product-package
+      Description: Dependencies for product app
+      ContentUri: layer/product-package/
+      CompatibleRuntimes:
+        - python3.10
+    Metadata:
+      BuildMethod: makefile
+
+  ProductFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: product-function-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: secret-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretName}-*"
+
+  ProductCreateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: product-create-function
+      Role: !GetAtt ProductFunctionRole.Arn
+      CodeUri: src/create/
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ProductApi
+            Path: /products
+            Method: post
+      DeploymentPreference:
+        Alarms:
+          - !Ref ProductCreateCanaryErrorsAlarm
+
+  ProductReadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: product-read-function
+      Role: !GetAtt ProductFunctionRole.Arn
+      CodeUri: src/read/
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ProductApi
+            Path: /products/{productId}
+            Method: get
+      DeploymentPreference:
+        Alarms:
+          - !Ref ProductReadCanaryErrorsAlarm
+
+  ProductUpdateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: product-update-function
+      Role: !GetAtt ProductFunctionRole.Arn
+      CodeUri: src/update/
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ProductApi
+            Path: /products/{productId}
+            Method: post
+      DeploymentPreference:
+        Alarms:
+          - !Ref ProductUpdateCanaryErrorsAlarm
+
+  ProductDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: product-delete-function
+      Role: !GetAtt ProductFunctionRole.Arn
+      CodeUri: src/delete/
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ProductApi
+            Path: /products/{productId}
+            Method: delete
+      DeploymentPreference:
+        Alarms:
+          - !Ref ProductDeleteCanaryErrorsAlarm
+
+  ProductCreateCanaryErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Canary errors from product create function
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 2
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Period: 60
+      Statistic: Sum
+      Threshold: 0
+      Dimensions:
+        - Name: Resource
+          Value: !Sub "${ProductCreateFunction}:live"
+        - Name: FunctionName
+          Value: !Ref ProductCreateFunction
+        - Name: ExecutedVersion
+          Value: !GetAtt ProductCreateFunction.Version.Version
+
+  ProductReadCanaryErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Canary errors from product read function
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 2
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Period: 60
+      Statistic: Sum
+      Threshold: 0
+      Dimensions:
+        - Name: Resource
+          Value: !Sub "${ProductReadFunction}:live"
+        - Name: FunctionName
+          Value: !Ref ProductReadFunction
+        - Name: ExecutedVersion
+          Value: !GetAtt ProductReadFunction.Version.Version
+
+  ProductUpdateCanaryErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Canary errors from product update function
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 2
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Period: 60
+      Statistic: Sum
+      Threshold: 0
+      Dimensions:
+        - Name: Resource
+          Value: !Sub "${ProductUpdateFunction}:live"
+        - Name: FunctionName
+          Value: !Ref ProductUpdateFunction
+        - Name: ExecutedVersion
+          Value: !GetAtt ProductUpdateFunction.Version.Version
+
+  ProductDeleteCanaryErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Canary errors from product delete function
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 2
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Period: 60
+      Statistic: Sum
+      Threshold: 0
+      Dimensions:
+        - Name: Resource
+          Value: !Sub "${ProductDeleteFunction}:live"
+        - Name: FunctionName
+          Value: !Ref ProductDeleteFunction
+        - Name: ExecutedVersion
+          Value: !GetAtt ProductDeleteFunction.Version.Version

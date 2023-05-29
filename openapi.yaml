@@ -1,0 +1,146 @@
+openapi: "3.0.1"
+info:
+  title: product
+  description: ""
+paths:
+  /products:
+    post:
+      x-amazon-apigateway-request-validator: "body-only"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/newProduct"
+        required: true
+      responses:
+        "201":
+          description: "201 response"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: post
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ProductCreateFunction.Arn}:live/invocations"
+        passthroughBehavior: when_no_match
+        responses:
+          default:
+            statusCode: "201"
+  /products/{productId}:
+    get:
+      x-amazon-apigateway-request-validator: "params-only"
+      parameters:
+      - name: productId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: "200 response"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: post
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ProductReadFunction.Arn}:live/invocations"
+        requestTemplates:
+          application/json: |
+            {
+              "id": "$input.params('productId')"
+            }
+        passthroughBehavior: when_no_match
+        responses:
+          default:
+            statusCode: "200"
+    post:
+      x-amazon-apigateway-request-validator: "body-and-params"
+      parameters:
+      - name: productId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/product"
+        required: true
+      responses:
+        "200":
+          description: "200 response"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: post
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ProductUpdateFunction.Arn}:live/invocations"
+        requestTemplates:
+          application/json: |
+            #set($inputRoot = $input.path('$'))
+            {
+              #foreach($key in $inputRoot.keySet())
+                "$key": "$inputRoot.get($key)",
+              #end
+              "id": "$input.params('productId')"
+            }
+        passthroughBehavior: when_no_match
+        responses:
+          default:
+            statusCode: "200"
+    delete:
+      x-amazon-apigateway-request-validator: "params-only"
+      parameters:
+      - name: productId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "204":
+          description: "204 response"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: post
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ProductDeleteFunction.Arn}:live/invocations"
+        requestTemplates:
+          application/json: |
+            {
+              "id": "$input.params('productId')"
+            }
+        passthroughBehavior: when_no_match
+        responses:
+          default:
+            statusCode: "204"
+components:
+  schemas:
+    product:
+      type: object
+      properties:
+        name:
+          type: string
+        category:
+          type: string
+    newProduct:
+      type: object
+      required:
+        - name
+        - category
+      properties:
+        name:
+          type: string
+        category:
+          type: string
+x-amazon-apigateway-request-validators:
+  body-and-params:
+    validateRequestParameters: true
+    validateRequestBody: true
+  params-only:
+    validateRequestParameters: true
+    validateRequestBody: false
+  body-only:
+    validateRequestParameters: false
+    validateRequestBody: true
+x-amazon-apigateway-gateway-responses:
+  MISSING_AUTHENTICATION_TOKEN:
+    statusCode: 404
+    responseTemplates:
+      application/json: "{\"message\": \"Resource Not Found\"}"

@@ -1,0 +1,21 @@
+version = 0.1
+
+[default.global.parameters]
+region = "ap-northeast-2"
+stack_name = "product-api"
+resolve_s3 = true
+s3_prefix = "product-api"
+template_file = "/tmp/product-build/template.yaml"
+
+[default.deploy.parameters]
+confirm_changeset = true
+on_failure = "DELETE"
+fail_on_empty_changeset = false
+capabilities = "CAPABILITY_NAMED_IAM"
+parameter_overrides = "SecretName=\"dev/product-user\" Subnets=\"subnet-08bc161d71ebb0ae3,subnet-0f3eb3792797bf8af\" SecurityGroups=\"sg-0bb66876d38048216\" PreferCanary=\"true\""
+image_repositories = []
+
+[default.build.parameters]
+parallel = true
+build_dir = "/tmp/product-build/"
+template_file = "template.yaml"
